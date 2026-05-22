@@ -221,3 +221,6 @@ __marimo__/
 
 # ELF files
 *.elf
+
+# FactorDB account details
+factordb_user.ini

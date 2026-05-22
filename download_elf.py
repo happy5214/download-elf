@@ -39,7 +39,6 @@ def download_elf(sequence_base: str) -> list[tuple[int, str]]:
         base = sequence_base
         try:
             with requests.get('https://factordb.com/elf.php', params=params, stream=True) as r:
-                line_count = 0
                 bad_file = False
                 for line in r.iter_lines(decode_unicode=True):
                     parsed_line = parse_elf_line(line)
@@ -49,7 +48,6 @@ def download_elf(sequence_base: str) -> list[tuple[int, str]]:
                     if not first_run:
                         first_run = True
                         continue
-                    line_count += 1
                     if parsed_line[1] is None:
                         if not incomplete:
                             elf_contents.append((parsed_line[0], ''))
@@ -57,7 +55,8 @@ def download_elf(sequence_base: str) -> list[tuple[int, str]]:
                     if parsed_line[0] < 1e199:
                         base = parsed_line[0]
                     elf_contents.append(parsed_line)
-                incomplete = bad_file or line_count > 0
+                if not bad_file:
+                    incomplete = False
         except requests.exceptions.ChunkedEncodingError:
             pass
         if bad_file:

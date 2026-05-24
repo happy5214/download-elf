@@ -38,6 +38,8 @@ def main() -> int:
             print('Attempting to download from FactorDB instead.')
             elf_downloader = FactorDBElfDownloader(args.sequence_base, args.expected_length)
             elf_downloader.download_and_write_elf(f'alq_{args.sequence_base}.elf')
+        else:
+            raise RuntimeError('Failed to download from FactorDB') from error
     return 0
 
 
@@ -146,6 +148,8 @@ class FactorDBElfDownloader(ElfDownloader):
                 temp_max = max(map(lambda x: x[0], temp_elf_contents))
                 if temp_max < 1e199 or already_exceeded:
                     self.elf_contents.extend(temp_elf_contents)
+                elif self._slice_end is None:
+                    raise RuntimeError('Expected length required for sequences exceeding 200 digits')
                 else:
                     self.elf_contents.extend(tuple(itertools.takewhile(lambda x: x[0] < 1e199, temp_elf_contents))[0:self._slice_end])
                     already_exceeded = True

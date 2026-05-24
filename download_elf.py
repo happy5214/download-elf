@@ -81,6 +81,7 @@ class ElfDownloader:
         incomplete = True
         first_run = True
         already_exceeded = False
+        cycle = False
         while incomplete:
             params = {'seq': base}
             temp_elf_contents = []
@@ -99,11 +100,13 @@ class ElfDownloader:
                         line_count += 1
                         parsed_line = self._parse_elf_line(line)
                         if not parsed_line[1]:
-                            if not incomplete:
-                                temp_elf_contents.append((parsed_line[0], ''))
+                            break
+                        if parsed_line in temp_elf_contents:
+                            cycle = True
+                            temp_elf_contents.append(parsed_line)
                             break
                         temp_elf_contents.append(parsed_line)
-                    incomplete = bad_file or line_count > 0
+                    incomplete = (bad_file or line_count > 0) and not cycle
             except requests.exceptions.ChunkedEncodingError:
                 pass
             if temp_elf_contents:

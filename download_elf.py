@@ -101,7 +101,7 @@ class ElfDownloader:
                         parsed_line = self._parse_elf_line(line)
                         if not parsed_line[1]:
                             break
-                        if parsed_line in temp_elf_contents:
+                        if parsed_line in self.elf_contents or parsed_line in temp_elf_contents:
                             cycle = True
                             temp_elf_contents.append(parsed_line)
                             break

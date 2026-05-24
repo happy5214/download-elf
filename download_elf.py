@@ -25,10 +25,19 @@ import requests
 
 def main() -> int:
     args = parse_args()
-    sequence_base = args.sequence_base
-    expected_length = args.expected_length
-    elf_downloader = ElfDownloader(sequence_base, expected_length)
-    elf_downloader.download_and_write_elf(f'alq_{sequence_base}.elf')
+    if args.use_mersenne_ca:
+        ElfDownloaderClass = MersenneCAElfDownloader
+    else:
+        ElfDownloaderClass = FactorDBElfDownloader
+    elf_downloader = ElfDownloaderClass(args.sequence_base, args.expected_length)
+    try:
+        elf_downloader.download_and_write_elf(f'alq_{args.sequence_base}.elf')
+    except RuntimeError as error:
+        if ElfDownloaderClass == MersenneCAElfDownloader:
+            print(f'Could not download ELF file from mersenne.ca: {error}.')
+            print('Attempting to download from FactorDB instead.')
+            elf_downloader = FactorDBElfDownloader(args.sequence_base, args.expected_length)
+            elf_downloader.download_and_write_elf(f'alq_{args.sequence_base}.elf')
     return 0
 
 
@@ -45,6 +54,12 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Provide the expected length of the sequence. If the sequence is shorter, this script will try alternative download techniques until it matches.",
     )
+    parser.add_argument(
+        "--use-mersenne-ca",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Default to the cached ELF files on mersenne.ca instead of using FactorDB. These are more reliable, but may be out-of-date.",
+    )
     return parser.parse_args()
 
 
@@ -52,14 +67,37 @@ class ElfDownloader:
     def __init__(self, sequence_base: str, expected_length: int):
         self.sequence_base = sequence_base
         self.expected_length = expected_length
-        self.cookies = self._get_cookies()
-        self.elf_contents = []
 
     def download_and_write_elf(self, filename: str) -> None:
         self.download_elf()
         self.write_elf(filename)
 
     def download_elf(self) -> list[tuple[int, str]]:
+        raise NotImplementedError()
+
+    def write_elf(self, filename: str) -> None:
+        with open(filename, 'wt') as elf_file:
+            for i, line in enumerate(self.elf_contents):
+                print(f'{i} .   {line[0]} = {line[1]}', file=elf_file)
+
+    @staticmethod
+    def parse_elf_line(elf_line: str) -> tuple[int, Optional[str]]:
+        elf_line_format = r'^\d+ \.\s+(\d+) = (\d+(?:\^\d+)?(?: \* \d+(?:\^\d+)?)*)?$'
+        match = re.match(elf_line_format, elf_line)
+        if match:
+            return (int(match[1]), match[2])
+        else:
+            return (0, 0)
+
+
+class FactorDBElfDownloader(ElfDownloader):
+    def __init__(self, sequence_base: str, expected_length: int):
+        super().__init__(sequence_base, expected_length)
+        self.cookies = self._get_cookies()
+        self.elf_contents = []
+
+    def download_elf(self) -> list[tuple[int, str]]:
+        print('Downloading from FactorDB...')
         if self.expected_length is None:
             self._slice_end = None
             return self._actually_download_elf()
@@ -69,11 +107,6 @@ class ElfDownloader:
             self._actually_download_elf()
             self._slice_end -= 1
         return self.elf_contents
-
-    def write_elf(self, filename: str) -> None:
-        with open(filename, 'wt') as elf_file:
-            for i, line in enumerate(self.elf_contents):
-                print(f'{i} .   {line[0]} = {line[1]}', file=elf_file)
 
     def _actually_download_elf(self) -> list[tuple[int, str]]:
         self.elf_contents = []
@@ -98,7 +131,7 @@ class ElfDownloader:
                             first_line = False
                             continue
                         line_count += 1
-                        parsed_line = self._parse_elf_line(line)
+                        parsed_line = ElfDownloader.parse_elf_line(line)
                         if not parsed_line[1]:
                             break
                         if parsed_line in self.elf_contents or parsed_line in temp_elf_contents:
@@ -162,13 +195,20 @@ class ElfDownloader:
         else:
             return None
 
-    def _parse_elf_line(self, elf_line: str) -> tuple[int, Optional[str]]:
-        elf_line_format = r'^\d+ \.\s+(\d+) = (\d+(?:\^\d+)?(?: \* \d+(?:\^\d+)?)*)?$'
-        match = re.match(elf_line_format, elf_line)
-        if match:
-            return (int(match[1]), match[2])
-        else:
-            return (0, 0)
+
+class MersenneCAElfDownloader(ElfDownloader):
+    def download_elf(self) -> list[tuple[int, str]]:
+        print('Downloading from mersenne.ca...')
+        with requests.get(f'https://www.mersenne.ca/factordb/elf/alq_{self.sequence_base}.elf') as r:
+            if not r.ok:
+                raise RuntimeError('ELF file not found on mersenne.ca')
+            lines = r.text.splitlines()
+            self.elf_contents = list(map(ElfDownloader.parse_elf_line, lines))
+            line_count = len(self.elf_contents)
+            if len(lines) != len(self.elf_contents):
+                raise RuntimeError('ELF file from mersenne.ca has invalid lines')
+            print(f'Downloaded {line_count - 1} lines from mersenne.ca.')
+            return self.elf_contents
 
 
 if __name__ == "__main__":

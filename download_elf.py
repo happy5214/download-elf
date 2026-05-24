@@ -29,7 +29,7 @@ def main() -> int:
         print('You must pass a sequence as a parameter')
         return 1
     elf_contents = download_elf(sequence_base)
-    write_elf(elf_contents, f'{sequence_base}.elf')
+    write_elf(elf_contents, f'alq_{sequence_base}.elf')
     return 0
 
 

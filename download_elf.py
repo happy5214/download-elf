@@ -164,12 +164,17 @@ class FactorDBElfDownloader(ElfDownloader):
         return self.elf_contents
 
     def _get_cookies(self) -> Optional[http.cookiejar.CookieJar]:
-        login_info = self._get_login()
-        if not login_info:
+        config = self._get_login()
+        if not config:
             print('Running anonymously.')
             return requests.cookies.cookiejar_from_dict(dict())
+        login_info = config['Account']
 
         user = login_info['User']
+        if config.has_option('Account', 'Cookie'):
+            print(f'Logged in as {user} using existing cookie.')
+            return requests.cookies.cookiejar_from_dict({'fdbuser': login_info['Cookie']})
+
         params = {
             'user': user,
             'pass': login_info['Password'],
@@ -189,13 +194,18 @@ class FactorDBElfDownloader(ElfDownloader):
 
         print(f'Logged in as {user}.')
 
+        login_info['Cookie'] = r.cookies.get('fdbuser')
+
+        with open('factordb_user.ini', 'wt') as config_file:
+            config.write(config_file)
+
         return r.cookies
 
-    def _get_login(self) -> Optional[dict]:
+    def _get_login(self) -> Optional[configparser.ConfigParser]:
         config = configparser.ConfigParser()
         config.read('factordb_user.ini')
         if config.has_section('Account'):
-            return config['Account']
+            return config
         else:
             return None
 

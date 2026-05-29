@@ -1,3 +1,6 @@
 [Account]
-User = FactorDBUser
-Password = FactorDBPassword
+user = FactorDBUser
+password = FactorDBPassword
+
+[Programs]
+aliqueit = ./aliqueit

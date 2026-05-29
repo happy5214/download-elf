@@ -16,6 +16,7 @@ import configparser
 import http.cookiejar
 import itertools
 import re
+import subprocess
 import sys
 import time
 from typing import Optional
@@ -29,14 +30,14 @@ def main() -> int:
         ElfDownloaderClass = FactorDBElfDownloader
     else:
         ElfDownloaderClass = MersenneCAElfDownloader
-    elf_downloader = ElfDownloaderClass(args.sequence_base, args.expected_length)
+    elf_downloader = ElfDownloaderClass(args.sequence_base, args.expected_length, args.validation_attempts)
     try:
         elf_downloader.download_and_write_elf(f'alq_{args.sequence_base}.elf')
     except RuntimeError as error:
         if ElfDownloaderClass == MersenneCAElfDownloader:
             print(f'Could not download ELF file from mersenne.ca: {error}.')
             print('Attempting to download from FactorDB instead.')
-            elf_downloader = FactorDBElfDownloader(args.sequence_base, args.expected_length)
+            elf_downloader = FactorDBElfDownloader(args.sequence_base, args.expected_length, args.validation_attempts)
             elf_downloader.download_and_write_elf(f'alq_{args.sequence_base}.elf')
         else:
             raise RuntimeError('Failed to download from FactorDB') from error
@@ -54,7 +55,13 @@ def parse_args() -> argparse.Namespace:
         "--expected-length",
         type=int,
         default=None,
-        help="Provide the expected length of the sequence. If the sequence is shorter, this script will try alternative download techniques until it matches.",
+        help="The expected length of the sequence. If the sequence is shorter, this script will try alternative download techniques until it matches.",
+    )
+    parser.add_argument(
+        "--validation-attempts",
+        type=int,
+        default=3,
+        help="The maximum number of attempts allowed to validate a sequence before the script will fail. Requires aliqueit to be configured.",
     )
     parser.add_argument(
         "--use-factordb",
@@ -66,21 +73,41 @@ def parse_args() -> argparse.Namespace:
 
 
 class ElfDownloader:
-    def __init__(self, sequence_base: str, expected_length: int):
+    def __init__(self, sequence_base: str, expected_length: int, validation_attempts: int):
         self.sequence_base = sequence_base
         self.expected_length = expected_length
+        self.validation_attempts = validation_attempts
+        self.config = self._get_config()
 
     def download_and_write_elf(self, filename: str) -> None:
-        self.download_elf()
-        self.write_elf(filename)
+        for i in range(self.validation_attempts):
+            self.download_elf()
+            returncode = self.write_elf(filename)
+            if returncode == 0:
+                return
+        print(f'Failed to validate ELF file after {self.validation_attempts} attempts, stopping...', file=sys.stderr)
 
     def download_elf(self) -> list[tuple[int, str]]:
         raise NotImplementedError()
 
-    def write_elf(self, filename: str) -> None:
+    def write_elf(self, filename: str) -> int:
+        if not self.elf_contents:
+            print('ELF file is empty, cannot validate...', file=sys.stderr)
+            return 1
         with open(filename, 'wt') as elf_file:
             for i, line in enumerate(self.elf_contents):
                 print(f'{i} .   {line[0]} = {line[1]}', file=elf_file)
+        if self.config.has_option('Programs', 'aliqueit'):
+            print('aliqueit is configured, validating ELF file...')
+            process = subprocess.run([self.config['Programs']['aliqueit'], '-t', self.sequence_base])
+            if process.returncode == 0:
+                print('ELF file validation succeeded.')
+            else:
+                print('ELF file validation failed.', file=sys.stderr)
+            return process.returncode
+        else:
+            print('aliqueit is not configured, skipping validation...')
+            return 0
 
     @staticmethod
     def parse_elf_line(elf_line: str) -> tuple[int, Optional[str]]:
@@ -91,10 +118,18 @@ class ElfDownloader:
         else:
             return (0, 0)
 
+    def _get_config(self) -> Optional[configparser.ConfigParser]:
+        config = configparser.ConfigParser()
+        config.read('factordb_user.ini')
+        if config.sections():
+            return config
+        else:
+            return None
+
 
 class FactorDBElfDownloader(ElfDownloader):
-    def __init__(self, sequence_base: str, expected_length: int):
-        super().__init__(sequence_base, expected_length)
+    def __init__(self, sequence_base: str, expected_length: int, validation_attempts: int):
+        super().__init__(sequence_base, expected_length, validation_attempts)
         self.cookies = self._get_cookies()
         self.elf_contents = []
 
@@ -159,19 +194,18 @@ class FactorDBElfDownloader(ElfDownloader):
                 time.sleep(5)
             else:
                 first_run = False
-                size = len(self.elf_contents) - 1
+                size = max(0, len(self.elf_contents) - 1)
                 print(f'Now at {size} lines.')
         return self.elf_contents
 
     def _get_cookies(self) -> Optional[http.cookiejar.CookieJar]:
-        config = self._get_login()
-        if not config:
+        if not self.config:
             print('Running anonymously.')
             return requests.cookies.cookiejar_from_dict(dict())
-        login_info = config['Account']
+        login_info = self.config['Account']
 
         user = login_info['User']
-        if config.has_option('Account', 'Cookie'):
+        if self.config.has_option('Account', 'Cookie'):
             print(f'Logged in as {user} using existing cookie.')
             return requests.cookies.cookiejar_from_dict({'fdbuser': login_info['Cookie']})
 
@@ -197,17 +231,9 @@ class FactorDBElfDownloader(ElfDownloader):
         login_info['Cookie'] = r.cookies.get('fdbuser')
 
         with open('factordb_user.ini', 'wt') as config_file:
-            config.write(config_file)
+            self.config.write(config_file)
 
         return r.cookies
-
-    def _get_login(self) -> Optional[configparser.ConfigParser]:
-        config = configparser.ConfigParser()
-        config.read('factordb_user.ini')
-        if config.has_section('Account'):
-            return config
-        else:
-            return None
 
 
 class MersenneCAElfDownloader(ElfDownloader):
@@ -218,10 +244,10 @@ class MersenneCAElfDownloader(ElfDownloader):
                 raise RuntimeError('ELF file not found on mersenne.ca')
             lines = r.text.splitlines()
             self.elf_contents = list(map(ElfDownloader.parse_elf_line, lines))
-            line_count = len(self.elf_contents)
+            line_count = max(0, len(self.elf_contents) - 1)
             if len(lines) != len(self.elf_contents):
                 raise RuntimeError('ELF file from mersenne.ca has invalid lines')
-            print(f'Downloaded {line_count - 1} lines from mersenne.ca.')
+            print(f'Downloaded {line_count} lines from mersenne.ca.')
             return self.elf_contents
 
 
